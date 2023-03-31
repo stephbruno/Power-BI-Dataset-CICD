@@ -1,0 +1,21 @@
+# Tabular Editor: https://docs.tabulareditor.com/te2/Command-line-Options.html
+
+trigger:
+  branches:
+    include:
+      - main                                                                              # the name of the branch that should trigger the pipeline
+  paths:
+    include:
+      - DatasetPath/                                                                      # the pipeline auto triggers when there is a change commited to branch
+
+variables:
+  DataSource: powerbi://api.powerbi.com/v1.0/myorg/Workspace Name                         # the Workspace where you will deploy
+  DeploymentDB: TestDataset                                                               # the name of the dataset to deploy to
+  UserId: app:xxxxxx-xxxxxx-xxxxxx-xxxxxx-xxxxxxxx@yyyyyy-yyyyyy-yyyyyy-yyyyyy-yyyyyyyy   # the UserId that has access to the workspace to deploy and refresh (in the form of app:AppId@TenantId)
+  AppId: xxxxxx-xxxxxx-xxxxxx-xxxxxx-xxxxxxxx                                             # the Service Principal identifier
+  TenantId: yyyyyy-yyyyyy-yyyyyy-yyyyyy-yyyyyyyy                                          # the tenant where the service prinicipal is registered
+  SourceControlPath: DatasetPath                                                          # the path in ADO where your Tabular model checked in as code.
+  ScriptFilePath: Pipelines\Deploy-PPE-PBIModel.cs                                        # the path for the script that Tabular Editor should run before deployment. Sample updates parameters.
+
+jobs:
+- template: PBI-Model-Deploy-Template.yml                                                 # the name of the yaml template file

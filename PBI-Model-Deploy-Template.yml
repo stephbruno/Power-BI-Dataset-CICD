@@ -1,0 +1,77 @@
+jobs:
+- job: AgentJob
+  displayName: Deploy Tabular Model
+  pool:
+    vmImage: 'windows-latest'
+  steps:
+  - checkout: self
+
+  - task: PowerShell@2
+    displayName: 1. Download Tabular Editor
+    inputs:
+      targetType: inline
+      script: "# Download URL for Tabular Editor portable: \n\n$TabularEditorUrl = \"https://github.com/otykier/TabularEditor/releases/download/2.16.5/TabularEditor.Portable.zip\"\n\n# Download destination (root of PowerShell script execution path): \n$DownloadDestination = join-path (get-location) \"TabularEditor.zip\" \necho($DownloadDestination)\n\n# Download from GitHub: \nInvoke-WebRequest -Uri $TabularEditorUrl -OutFile $DownloadDestination \n\n \n# Unzip Tabular Editor portable, and then delete the zip file:\n \nExpand-Archive -Path $DownloadDestination -DestinationPath (get-location).Path \n#Remove-Item $DownloadDestination "
+
+  - task: CmdLine@2
+    displayName: 2. Best Practice Check
+    inputs:
+      script: TabularEditor.exe "$(SourceControlPath)\database.json" -A -T testbpa.trx -V
+
+  - task: CopyFiles@2
+    displayName: 3. Copy Source Files
+    inputs:
+      SourceFolder: $(SourceControlPath)
+      Contents: database.json
+      TargetFolder: $(Build.ArtifactStagingDirectory)/PBIModel/Scripts
+
+  - task: CmdLine@2
+    displayName: 4. Schema Check
+    inputs:
+      script: TabularEditor.exe "$(Build.ArtifactStagingDirectory)\PBIModel\Scripts\database.json" -S "Pipelines\SetCredentialsForValidation.csx" -SC -T testsc.trx -V
+
+  - task: AzureKeyVault@2
+    displayName: 5. Read Key vault
+    inputs:
+      connectedServiceName: 'MyServiceConnectionName'   # The name of the Service Connection to access the key vault
+      KeyVaultName: 'MyKeyVauleName'                    # The name of the key vault
+      SecretsFilter: 'mysecret'                         # This step copies the password to this variable, so in subseqent steps the name should match. If you change it here, do a find and replace to change it everywhere in this file.
+      RunAsPreJob: true
+
+  - task: CmdLine@2
+    displayName: 6. Deployment Check
+    inputs:
+      script: TabularEditor.exe "$(Build.ArtifactStagingDirectory)\PBIModel\Scripts\database.json" -D "Provider=MSOLAP;Data Source=$(DataSource);User ID=$(UserId);password=$(mysecret)" "$(DeploymentDB)" -O -C -E -W -T testdep.trx -V
+
+  - task: CmdLine@2
+    displayName: 7. Create BIM File
+    inputs:
+      script: TabularEditor.exe "$(Build.SourcesDirectory)\$(SourceControlPath)" -BIM "$(Build.ArtifactStagingDirectory)\Model.bim"
+
+  - task: PublishBuildArtifacts@1
+    displayName: 8. Publish Artifact DBArtifacts
+    inputs:
+      PathtoPublish: $(build.ArtifactStagingDirectory)
+      ArtifactName: DBArtifacts
+
+  - task: CmdLine@2
+    displayName: 9. Deploy BIM File
+    inputs:
+      script: TabularEditor.exe "$(Build.ArtifactStagingDirectory)\Model.bim" -S "$(ScriptFilePath)" -D "Provider=MSOLAP;Data Source=$(DataSource);User ID=$(UserId);password=$(mysecret)" "$(DeploymentDB)" -O -P -Y
+
+  - task: PowerShell@2
+    displayName: '10. Refresh Power BI dataset'
+    inputs:
+      targetType: 'inline'
+      script: |
+        Install-Module -Name MicrosoftPowerBIMgmt -Scope CurrentUser -Force
+        $SecurePassword = ConvertTo-SecureString “$(mysecret)” -AsPlainText -Force  
+        $credential = [System.Management.Automation.PSCredential]::new("$(AppId)", $SecurePassword)  
+        Connect-PowerBIServiceAccount -ServicePrincipal -Tenant $(TenantId) -Credential $credential
+        $WorkspaceName = "$(DataSource)".split("/")[-1]
+        $Workspace = Get-PowerBIWorkspace -Name $WorkspaceName
+        $groupId = $Workspace[0].Id
+        $Dataset = Get-PowerBIDataset -WorkspaceId $groupId | Where-Object {$_.name -eq "$(DeploymentDB)"}
+        $datasetId = $Dataset[0].Id
+
+        Invoke-PowerBIRestMethod -Url "https://api.powerbi.com/v1.0/myorg/groups/$groupId/datasets/$datasetId/refreshes" -Method POST  -WarningAction Ignore
+
